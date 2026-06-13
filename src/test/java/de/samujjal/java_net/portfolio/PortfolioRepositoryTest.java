@@ -100,7 +100,7 @@ class PortfolioRepositoryTest {
                 DEMO_CUSTOMER, "NVDA", Side.BUY, 4, new BigDecimal("120.0000"), null);
         assertThat(tradeId).isPositive();
 
-        List<TradeRecord> history = repository.tradeHistory(DEMO_CUSTOMER, 10);
+        List<TradeRecord> history = repository.tradeHistory(DEMO_CUSTOMER, null, 10);
         assertThat(history).hasSize(1);
         TradeRecord record = history.get(0);
         assertThat(record.id()).isEqualTo(tradeId);
@@ -114,5 +114,27 @@ class PortfolioRepositoryTest {
         repository.updateCash(DEMO_CUSTOMER, new BigDecimal("12345.6700"));
         assertThat(repository.findCustomer(DEMO_CUSTOMER).orElseThrow().cashBalance())
                 .isEqualByComparingTo("12345.6700");
+    }
+
+    @Test
+    void listInstrumentsKeysetPaginatesBySymbol() {
+        // First two of the five seeded instruments (AAPL, MSFT, NVDA, SAP, TSLA).
+        List<Instrument> firstTwo = repository.listInstruments(null, 2);
+        assertThat(firstTwo).extracting(Instrument::symbol).containsExactly("AAPL", "MSFT");
+
+        List<Instrument> afterMsft = repository.listInstruments("MSFT", 2);
+        assertThat(afterMsft).extracting(Instrument::symbol).containsExactly("NVDA", "SAP");
+    }
+
+    @Test
+    void tradeHistoryKeysetPaginatesByIdDescending() {
+        long t1 = repository.insertTrade(DEMO_CUSTOMER, "AAPL", Side.BUY, 1, new BigDecimal("195.0000"), null);
+        long t2 = repository.insertTrade(DEMO_CUSTOMER, "MSFT", Side.BUY, 1, new BigDecimal("430.0000"), null);
+
+        List<TradeRecord> firstPage = repository.tradeHistory(DEMO_CUSTOMER, null, 1);
+        assertThat(firstPage).extracting(TradeRecord::id).containsExactly(t2); // newest first
+
+        List<TradeRecord> nextPage = repository.tradeHistory(DEMO_CUSTOMER, t2, 1);
+        assertThat(nextPage).extracting(TradeRecord::id).containsExactly(t1);
     }
 }

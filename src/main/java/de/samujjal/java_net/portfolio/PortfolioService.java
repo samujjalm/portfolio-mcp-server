@@ -1,24 +1,61 @@
 package de.samujjal.java_net.portfolio;
 
+import com.github.benmanes.caffeine.cache.Cache;
+import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeFormatter;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 
 /**
- * Trading logic over the portfolio. BUYs append a new FIFO lot; SELLs consume
- * the oldest open lots first, computing realized P&L from their cost basis.
+ * Trading logic over the portfolio. BUYs append a new FIFO lot; SELLs consume the
+ * oldest open lots first, computing realized P&L from their cost basis.
+ *
+ * <p>Writes run through a {@link TransactionTemplate} (rather than {@code @Transactional}
+ * self-invocation) so that {@link #executeTrade} can layer idempotency caching around the
+ * transaction and {@link #previewTrade} can run the identical logic in a separate
+ * transaction that is always rolled back.
  */
 @Service
 public class PortfolioService {
 
-    private static final int MAX_HISTORY = 100;
+    private static final int DEFAULT_PAGE_SIZE = 50;
+    private static final int MAX_PAGE_SIZE = 100;
+    private static final Duration IDEMPOTENCY_TTL = Duration.ofMinutes(5);
+
+    /** Thrown solely to force rollback of a {@link #previewTrade} simulation; never escapes the method. */
+    private static final class PreviewRollback extends RuntimeException {
+        private PreviewRollback() {
+            super(null, null, false, false);
+        }
+    }
+
+    private static final PreviewRollback PREVIEW_ROLLBACK = new PreviewRollback();
 
     private final PortfolioRepository repository;
+    private final TransactionTemplate writeTransaction;
+    private final TransactionTemplate previewTransaction;
+    private final Cache<String, TradeResult> idempotencyCache;
 
-    public PortfolioService(PortfolioRepository repository) {
+    public PortfolioService(PortfolioRepository repository, PlatformTransactionManager transactionManager) {
         this.repository = repository;
+        this.writeTransaction = new TransactionTemplate(transactionManager);
+        this.previewTransaction = new TransactionTemplate(transactionManager);
+        // A dedicated, isolated transaction so the rollback never touches a caller's transaction.
+        this.previewTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        this.idempotencyCache = Caffeine.newBuilder()
+                .expireAfterWrite(IDEMPOTENCY_TTL)
+                .maximumSize(10_000)
+                .build();
     }
 
     @Transactional(readOnly = true)
@@ -38,33 +75,137 @@ public class PortfolioService {
     }
 
     @Transactional(readOnly = true)
-    public List<Instrument> listInstruments() {
-        return repository.listInstruments();
+    public Page<Instrument> listInstruments(Integer limit, String cursor) {
+        int pageSize = clampPageSize(limit);
+        List<Instrument> rows = repository.listInstruments(cursor, pageSize + 1);
+        return toPage(rows, pageSize, Instrument::symbol);
     }
 
     @Transactional(readOnly = true)
-    public Instrument getQuote(String symbol) {
-        return requireInstrument(symbol);
-    }
-
-    @Transactional(readOnly = true)
-    public List<TradeRecord> tradeHistory(long customerId) {
-        requireCustomer(customerId);
-        return repository.tradeHistory(customerId, MAX_HISTORY);
-    }
-
-    @Transactional
-    public TradeResult executeTrade(long customerId, String symbol, Side side, int quantity) {
-        if (quantity <= 0) {
-            throw new TradeException("Quantity must be a positive whole number, got " + quantity);
-        }
-        Customer customer = requireCustomer(customerId);
+    public Quote getQuote(String symbol) {
         Instrument instrument = requireInstrument(symbol);
-        BigDecimal price = instrument.lastPrice();
+        String fetchedAt = DateTimeFormatter.ISO_INSTANT.format(Instant.now());
+        return new Quote(
+                instrument.symbol(),
+                instrument.name(),
+                instrument.isin(),
+                instrument.wkn(),
+                instrument.lastPrice(),
+                fetchedAt);
+    }
 
-        return side == Side.BUY
-                ? buy(customer, instrument, price, quantity)
-                : sell(customer, instrument, price, quantity);
+    @Transactional(readOnly = true)
+    public Page<TradeRecord> tradeHistory(long customerId, Integer limit, String cursor) {
+        requireCustomer(customerId);
+        int pageSize = clampPageSize(limit);
+        Long beforeId = (cursor == null || cursor.isBlank()) ? null : Long.parseLong(cursor.trim());
+        List<TradeRecord> rows = repository.tradeHistory(customerId, beforeId, pageSize + 1);
+        return toPage(rows, pageSize, TradeRecord::id);
+    }
+
+    /**
+     * Executes a trade, persisting the result. Idempotent on {@link TradeRequest#idempotencyKey()}:
+     * a repeated key within the TTL returns the cached receipt without executing again.
+     */
+    public TradeResult executeTrade(TradeRequest request) {
+        String key = request.idempotencyKey();
+        if (key != null && !key.isBlank()) {
+            TradeResult cached = idempotencyCache.getIfPresent(key);
+            if (cached != null) {
+                return cached;
+            }
+        }
+        TradeResult result = writeTransaction.execute(status -> executeCore(request));
+        if (key != null && !key.isBlank()) {
+            idempotencyCache.put(key, result);
+        }
+        return result;
+    }
+
+    /**
+     * Simulates a trade: runs the identical FIFO/validation logic as {@link #executeTrade}, then
+     * rolls back its transaction so nothing is persisted. Returns the projected outcome.
+     */
+    public TradePreview previewTrade(TradeRequest request) {
+        AtomicReference<TradePreview> holder = new AtomicReference<>();
+        try {
+            previewTransaction.executeWithoutResult(status -> {
+                holder.set(computePreview(request));
+                throw PREVIEW_ROLLBACK;
+            });
+        } catch (PreviewRollback expected) {
+            // The simulation transaction has been rolled back; the projection is in `holder`.
+        }
+        return holder.get();
+    }
+
+    private TradePreview computePreview(TradeRequest request) {
+        try {
+            TradeResult projected = executeCore(request);
+            BigDecimal estimatedCost = projected.price().multiply(BigDecimal.valueOf(projected.quantity()));
+            return new TradePreview(
+                    true, null,
+                    projected.symbol(), projected.side(), projected.quantity(),
+                    projected.price(), estimatedCost, slippageMargin(request, projected.price()),
+                    projected.cashBalance(), projected.resultingPosition());
+        } catch (TradeException invalid) {
+            return new TradePreview(
+                    false, invalid.getMessage(),
+                    request.symbol(), request.side(), request.quantity(),
+                    null, null, null, null, null);
+        }
+    }
+
+    /** Shared trade logic used by both real execution and simulation. */
+    private TradeResult executeCore(TradeRequest request) {
+        if (request.quantity() <= 0) {
+            throw new TradeException("Quantity must be a positive whole number, got " + request.quantity());
+        }
+        if (request.idempotencyKey() == null || request.idempotencyKey().isBlank()) {
+            throw new TradeException("idempotencyKey is required");
+        }
+        Customer customer = requireCustomer(request.customerId());
+        Instrument instrument = requireInstrument(request.symbol());
+        BigDecimal executionPrice = resolveExecutionPrice(request, instrument);
+
+        return request.side() == Side.BUY
+                ? buy(customer, instrument, executionPrice, request.quantity())
+                : sell(customer, instrument, executionPrice, request.quantity());
+    }
+
+    /**
+     * Resolves the fill price. MARKET fills at the current price. LIMIT requires a limit price and
+     * only fills when marketable (BUY: market &le; limit; SELL: market &ge; limit), filling at the
+     * current market price (honouring any price improvement).
+     */
+    private BigDecimal resolveExecutionPrice(TradeRequest request, Instrument instrument) {
+        BigDecimal market = instrument.lastPrice();
+        if (request.effectiveOrderType() != OrderType.LIMIT) {
+            return market;
+        }
+        BigDecimal limit = request.limitPrice();
+        if (limit == null) {
+            throw new TradeException("limitPrice is required for LIMIT orders");
+        }
+        if (request.side() == Side.BUY && market.compareTo(limit) > 0) {
+            throw new TradeException("LIMIT BUY not marketable: market price %s for %s exceeds limit %s"
+                    .formatted(market, instrument.symbol(), limit));
+        }
+        if (request.side() == Side.SELL && market.compareTo(limit) < 0) {
+            throw new TradeException("LIMIT SELL not marketable: market price %s for %s is below limit %s"
+                    .formatted(market, instrument.symbol(), limit));
+        }
+        return market;
+    }
+
+    private BigDecimal slippageMargin(TradeRequest request, BigDecimal executionPrice) {
+        if (request.effectiveOrderType() != OrderType.LIMIT || request.limitPrice() == null) {
+            return BigDecimal.ZERO;
+        }
+        // Favourable margin between the limit and the actual fill.
+        return request.side() == Side.BUY
+                ? request.limitPrice().subtract(executionPrice)
+                : executionPrice.subtract(request.limitPrice());
     }
 
     private TradeResult buy(Customer customer, Instrument instrument, BigDecimal price, int quantity) {
@@ -111,6 +252,21 @@ public class PortfolioService {
 
         return new TradeResult(tradeId, instrument.symbol(), Side.SELL, quantity, price, realizedPnl, newCash,
                 repository.position(customer.id(), instrument.symbol()).orElse(null));
+    }
+
+    private int clampPageSize(Integer limit) {
+        if (limit == null) {
+            return DEFAULT_PAGE_SIZE;
+        }
+        return Math.min(Math.max(limit, 1), MAX_PAGE_SIZE);
+    }
+
+    private <T> Page<T> toPage(List<T> rows, int pageSize, Function<T, Object> cursorOf) {
+        if (rows.size() > pageSize) {
+            List<T> items = List.copyOf(rows.subList(0, pageSize));
+            return new Page<>(items, String.valueOf(cursorOf.apply(items.get(pageSize - 1))));
+        }
+        return new Page<>(List.copyOf(rows), null);
     }
 
     private Customer requireCustomer(long customerId) {

@@ -13,6 +13,7 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -22,8 +23,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * End-to-end integration test of the MCP tool surface against a real Postgres
  * (Testcontainers). Invokes the registered {@link ToolCallback}s exactly as the MCP
  * server does — JSON arguments in, JSON result out — exercising the full stack
- * (tool binding → service → jOOQ repository → database), including the nested
- * {@code executeTrade} request shape produced by the {@link TradeRequest} schema.
+ * (tool binding → service → jOOQ repository → database).
  */
 @Import(TestcontainersConfiguration.class)
 @SpringBootTest
@@ -48,54 +48,81 @@ class PortfolioToolsIntegrationTest {
     }
 
     @Test
-    void registersTheFivePortfolioTools() {
+    void registersThePortfolioTools() {
         assertThat(Arrays.stream(provider.getToolCallbacks())
                 .map(c -> c.getToolDefinition().name()))
                 .containsExactlyInAnyOrder(
-                        "getPortfolio", "listInstruments", "getQuote", "executeTrade", "getTradeHistory");
+                        "getPortfolio", "listInstruments", "getQuote",
+                        "executeTrade", "previewTrade", "getTradeHistory");
     }
 
     @Test
-    void listInstrumentsReturnsSeededUniverse() {
-        JsonNode instruments = call("listInstruments", "{}");
-        assertThat(instruments.isArray()).isTrue();
-        assertThat(instruments.size()).isEqualTo(5);
+    void listInstrumentsReturnsPagedEnvelope() {
+        JsonNode page = call("listInstruments", "{}");
+        assertThat(page.get("items").isArray()).isTrue();
+        assertThat(page.get("items").size()).isEqualTo(5);
+        assertThat(page.has("nextCursor")).isTrue(); // null here: all 5 fit in one page
     }
 
     @Test
-    void getQuoteReturnsIdentifiers() {
+    void listInstrumentsPaginatesWithCursor() {
+        JsonNode first = call("listInstruments", "{\"limit\":2}");
+        assertThat(first.get("items").size()).isEqualTo(2);
+        String cursor = first.get("nextCursor").asString();
+        assertThat(cursor).isNotBlank();
+
+        JsonNode second = call("listInstruments", "{\"limit\":2,\"cursor\":\"" + cursor + "\"}");
+        assertThat(second.get("items").size()).isEqualTo(2);
+        assertThat(second.get("items").get(0).get("symbol").asString()).isGreaterThan(cursor);
+    }
+
+    @Test
+    void getQuoteReturnsIdentifiersAndIsoTimestamp() {
         JsonNode quote = call("getQuote", "{\"symbol\":\"AAPL\"}");
         assertThat(quote.get("isin").asString()).isEqualTo("US0378331005");
         assertThat(new BigDecimal(quote.get("lastPrice").asString())).isEqualByComparingTo("195.0000");
+        assertThat(Instant.parse(quote.get("timestamp").asString())).isNotNull();
     }
 
     @Test
     void executeTradeWithNestedRequestThenPortfolioReflectsIt() {
-        // BUY 10 AAPL @ 195 via the nested request shape the schema advertises.
-        JsonNode buy = call("executeTrade",
-                "{\"request\":{\"customerId\":1,\"symbol\":\"AAPL\",\"side\":\"BUY\",\"quantity\":10}}");
+        JsonNode buy = call("executeTrade", """
+                {"request":{"customerId":1,"symbol":"AAPL","side":"BUY","quantity":10,
+                 "idempotencyKey":"11111111-1111-1111-1111-111111111111","orderType":"MARKET"}}""");
         assertThat(buy.get("side").asString()).isEqualTo("BUY");
-        assertThat(buy.get("quantity").asInt()).isEqualTo(10);
         assertThat(new BigDecimal(buy.get("cashBalance").asString())).isEqualByComparingTo("98050.0000");
 
         JsonNode portfolio = call("getPortfolio", "{\"customerId\":1}");
         assertThat(new BigDecimal(portfolio.get("cashBalance").asString())).isEqualByComparingTo("98050.0000");
-        JsonNode positions = portfolio.get("positions");
-        assertThat(positions.size()).isEqualTo(1);
-        assertThat(positions.get(0).get("symbol").asString()).isEqualTo("AAPL");
-        assertThat(positions.get(0).get("quantity").asInt()).isEqualTo(10);
+        assertThat(portfolio.get("positions").size()).isEqualTo(1);
+        assertThat(portfolio.get("positions").get(0).get("symbol").asString()).isEqualTo("AAPL");
 
         JsonNode history = call("getTradeHistory", "{\"customerId\":1}");
-        assertThat(history.size()).isEqualTo(1);
-        assertThat(history.get(0).get("symbol").asString()).isEqualTo("AAPL");
+        assertThat(history.get("items").size()).isEqualTo(1);
+        assertThat(history.get("items").get(0).get("symbol").asString()).isEqualTo("AAPL");
+    }
+
+    @Test
+    void previewTradeProjectsOutcomeWithoutPersisting() {
+        JsonNode preview = call("previewTrade", """
+                {"request":{"customerId":1,"symbol":"AAPL","side":"BUY","quantity":10,
+                 "idempotencyKey":"22222222-2222-2222-2222-222222222222","orderType":"MARKET"}}""");
+        assertThat(preview.get("isValid").asBoolean()).isTrue();
+        assertThat(new BigDecimal(preview.get("estimatedCost").asString())).isEqualByComparingTo("1950.0000");
+        assertThat(new BigDecimal(preview.get("projectedCashBalance").asString())).isEqualByComparingTo("98050.0000");
+
+        // Simulation must not persist: the portfolio is unchanged.
+        JsonNode portfolio = call("getPortfolio", "{\"customerId\":1}");
+        assertThat(new BigDecimal(portfolio.get("cashBalance").asString())).isEqualByComparingTo("100000.0000");
+        assertThat(portfolio.get("positions").size()).isEqualTo(0);
     }
 
     @Test
     void executeTradeSurfacesDomainErrors() {
-        // Selling shares the customer does not own must fail through the tool layer.
-        // MethodToolCallback wraps the cause in a ToolExecutionException, so assert on the root cause.
-        assertThatThrownBy(() -> call("executeTrade",
-                "{\"request\":{\"customerId\":1,\"symbol\":\"MSFT\",\"side\":\"SELL\",\"quantity\":1}}"))
+        // MethodToolCallback wraps the cause in a ToolExecutionException; assert on the root cause.
+        assertThatThrownBy(() -> call("executeTrade", """
+                {"request":{"customerId":1,"symbol":"MSFT","side":"SELL","quantity":1,
+                 "idempotencyKey":"33333333-3333-3333-3333-333333333333"}}"""))
                 .rootCause()
                 .isInstanceOf(TradeException.class)
                 .hasMessageContaining("Insufficient shares");

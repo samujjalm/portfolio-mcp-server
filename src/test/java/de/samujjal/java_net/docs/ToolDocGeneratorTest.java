@@ -70,8 +70,8 @@ class ToolDocGeneratorTest {
         Files.writeString(OUTPUT, md.toString());
 
         // Guard: the reference must list all tools with real schemas.
-        assertThat(tools).hasSize(5);
-        assertThat(Files.readString(OUTPUT)).contains("executeTrade").contains("BUY");
+        assertThat(tools).hasSize(6);
+        assertThat(Files.readString(OUTPUT)).contains("executeTrade").contains("previewTrade").contains("BUY");
     }
 
     private String renderTool(ToolDefinition d) {

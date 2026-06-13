@@ -46,8 +46,15 @@ public class PortfolioRepository {
                         r.get("last_price", BigDecimal.class)));
     }
 
-    public List<Instrument> listInstruments() {
-        return dsl.fetch("select symbol, name, isin, wkn, last_price from instrument order by symbol")
+    /** Instruments ordered by symbol, keyset-paginated: returns up to {@code limit} rows with symbol > {@code afterSymbol}. */
+    public List<Instrument> listInstruments(String afterSymbol, int limit) {
+        return dsl.fetch("""
+                        select symbol, name, isin, wkn, last_price
+                        from instrument
+                        where (?::text is null or symbol > ?)
+                        order by symbol
+                        limit ?
+                        """, afterSymbol, afterSymbol, limit)
                 .map(r -> new Instrument(
                         r.get("symbol", String.class),
                         r.get("name", String.class),
@@ -91,14 +98,18 @@ public class PortfolioRepository {
                 .get("id", Long.class);
     }
 
-    public List<TradeRecord> tradeHistory(long customerId, int limit) {
+    /**
+     * Trade ledger newest-first, keyset-paginated: returns up to {@code limit} rows with id &lt; {@code beforeId}
+     * (pass {@code null} for the first page). Ordering by id desc matches executed-at desc for our inserts.
+     */
+    public List<TradeRecord> tradeHistory(long customerId, Long beforeId, int limit) {
         return dsl.fetch("""
                         select id, symbol, side, quantity, price, realized_pnl, executed_at
                         from trade
-                        where customer_id = ?
-                        order by executed_at desc, id desc
+                        where customer_id = ? and (?::bigint is null or id < ?)
+                        order by id desc
                         limit ?
-                        """, customerId, limit)
+                        """, customerId, beforeId, beforeId, limit)
                 .map(r -> new TradeRecord(
                         r.get("id", Long.class),
                         r.get("symbol", String.class),
