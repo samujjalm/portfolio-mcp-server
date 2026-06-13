@@ -1,7 +1,11 @@
+import org.jooq.meta.jaxb.Logging
+import org.jooq.meta.jaxb.Property
+
 plugins {
 	java
 	id("org.springframework.boot") version "4.1.0"
 	id("io.spring.dependency-management") version "1.1.7"
+	id("nu.studer.jooq") version "10.2.1"
 }
 
 group = "de.samujjal"
@@ -30,6 +34,8 @@ dependencies {
 	implementation("io.swagger.core.v3:swagger-annotations-jakarta:2.2.38")
 	implementation("org.springframework.boot:spring-boot-starter-flyway")
 	implementation("org.springframework.boot:spring-boot-starter-jooq")
+	// jOOQ code generation reads the schema straight from the Flyway migrations (no DB needed at build time).
+	jooqGenerator("org.jooq:jooq-meta-extensions:3.21.5")
 	implementation("org.springframework.boot:spring-boot-starter-restclient")
 	implementation("org.springframework.boot:spring-boot-starter-security")
 	implementation("org.springframework.boot:spring-boot-starter-webmvc")
@@ -57,6 +63,43 @@ dependencies {
 
 tasks.withType<Test> {
 	useJUnitPlatform()
+}
+
+// Generate the type-safe jOOQ metamodel (tables, records, POJOs) from the Flyway migrations
+// via jOOQ's DDLDatabase — no live database required. Output lands in build/generated-src.
+jooq {
+	version.set("3.21.5")
+	configurations {
+		create("main") {
+			generateSchemaSourceOnCompilation.set(true)
+			jooqConfiguration.apply {
+				logging = Logging.WARN
+				generator.apply {
+					database.apply {
+						name = "org.jooq.meta.extensions.ddl.DDLDatabase"
+						properties.addAll(listOf(
+							Property().withKey("scripts").withValue("src/main/resources/db/migration/*.sql"),
+							Property().withKey("sort").withValue("flyway"),
+							Property().withKey("defaultNameCase").withValue("lower"),
+							// Parse vendor-specific DDL (timestamptz, identity columns, etc.) as PostgreSQL.
+							Property().withKey("parseDialect").withValue("POSTGRES"),
+						))
+					}
+					generate.apply {
+						isRecords = true
+						isPojos = true
+						isDaos = false
+						isFluentSetters = false
+						isJavaTimeTypes = true
+					}
+					target.apply {
+						packageName = "de.samujjal.java_net.jooq"
+						directory = "build/generated-src/jooq/main"
+					}
+				}
+			}
+		}
+	}
 }
 
 // Regenerates docs/TOOLS.md from the @Tool annotations. Pure reflection — no server,

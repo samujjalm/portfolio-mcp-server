@@ -1,6 +1,6 @@
 package de.samujjal.java_net.config;
 
-import de.samujjal.java_net.portfolio.PortfolioTools;
+import de.samujjal.java_net.controller.PortfolioTools;
 import org.springframework.ai.tool.ToolCallbackProvider;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.context.annotation.Bean;

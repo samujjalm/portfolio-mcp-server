@@ -1,5 +1,14 @@
-package de.samujjal.java_net.portfolio;
+package de.samujjal.java_net.controller;
 
+import de.samujjal.java_net.model.Instrument;
+import de.samujjal.java_net.model.Page;
+import de.samujjal.java_net.model.PortfolioView;
+import de.samujjal.java_net.model.Quote;
+import de.samujjal.java_net.model.TradePreview;
+import de.samujjal.java_net.model.TradeRecord;
+import de.samujjal.java_net.model.TradeRequest;
+import de.samujjal.java_net.model.TradeResult;
+import de.samujjal.java_net.service.PortfolioService;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 import org.springframework.stereotype.Component;

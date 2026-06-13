@@ -1,6 +1,7 @@
-package de.samujjal.java_net.portfolio;
+package de.samujjal.java_net.controller;
 
 import de.samujjal.java_net.TestcontainersConfiguration;
+import de.samujjal.java_net.model.TradeException;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.ToolCallbackProvider;

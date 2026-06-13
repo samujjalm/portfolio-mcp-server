@@ -1,6 +1,6 @@
 package de.samujjal.java_net.docs;
 
-import de.samujjal.java_net.portfolio.PortfolioTools;
+import de.samujjal.java_net.controller.PortfolioTools;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;

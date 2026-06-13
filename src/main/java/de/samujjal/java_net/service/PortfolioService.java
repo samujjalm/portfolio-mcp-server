@@ -1,5 +1,20 @@
-package de.samujjal.java_net.portfolio;
+package de.samujjal.java_net.service;
 
+import de.samujjal.java_net.model.Customer;
+import de.samujjal.java_net.model.Instrument;
+import de.samujjal.java_net.model.OpenLot;
+import de.samujjal.java_net.model.OrderType;
+import de.samujjal.java_net.model.Page;
+import de.samujjal.java_net.model.PortfolioView;
+import de.samujjal.java_net.model.Position;
+import de.samujjal.java_net.model.Quote;
+import de.samujjal.java_net.model.Side;
+import de.samujjal.java_net.model.TradeException;
+import de.samujjal.java_net.model.TradePreview;
+import de.samujjal.java_net.model.TradeRecord;
+import de.samujjal.java_net.model.TradeRequest;
+import de.samujjal.java_net.model.TradeResult;
+import de.samujjal.java_net.repository.PortfolioRepository;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import org.springframework.stereotype.Service;

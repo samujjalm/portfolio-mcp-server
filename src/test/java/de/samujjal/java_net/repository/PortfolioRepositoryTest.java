@@ -1,6 +1,12 @@
-package de.samujjal.java_net.portfolio;
+package de.samujjal.java_net.repository;
 
 import de.samujjal.java_net.TestcontainersConfiguration;
+import de.samujjal.java_net.model.Customer;
+import de.samujjal.java_net.model.Instrument;
+import de.samujjal.java_net.model.OpenLot;
+import de.samujjal.java_net.model.Position;
+import de.samujjal.java_net.model.Side;
+import de.samujjal.java_net.model.TradeRecord;
 import org.jooq.DSLContext;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;

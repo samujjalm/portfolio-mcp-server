@@ -1,4 +1,4 @@
-package de.samujjal.java_net.portfolio;
+package de.samujjal.java_net.model;
 
 import io.swagger.v3.oas.annotations.media.Schema;
 

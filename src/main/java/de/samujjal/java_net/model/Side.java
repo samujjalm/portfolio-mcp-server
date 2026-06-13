@@ -1,4 +1,4 @@
-package de.samujjal.java_net.portfolio;
+package de.samujjal.java_net.model;
 
 /** Direction of a trade. */
 public enum Side {

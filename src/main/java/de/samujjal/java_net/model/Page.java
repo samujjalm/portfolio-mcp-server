@@ -1,4 +1,4 @@
-package de.samujjal.java_net.portfolio;
+package de.samujjal.java_net.model;
 
 import java.util.List;
 
