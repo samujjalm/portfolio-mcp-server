@@ -51,7 +51,7 @@ class ToolDocGeneratorTest {
         md.append("> Generated from the `@Tool` annotations by `ToolDocGeneratorTest`. ")
                 .append("Do not edit by hand — run `./gradlew generateToolDocs` to refresh.\n\n");
         md.append("- **Server:** `portfolio-mcp` v0.0.1\n");
-        md.append("- **Transport:** HTTP/SSE — connect at `http://localhost:8080/sse`\n");
+        md.append("- **Transport:** HTTP/SSE — connect at `http://localhost:8089/sse`\n");
         md.append("- **Tools:** ").append(tools.size()).append("\n\n");
 
         md.append("| Tool | Summary |\n|------|---------|\n");

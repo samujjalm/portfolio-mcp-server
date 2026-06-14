@@ -72,7 +72,7 @@ No local Postgres install or manual DB setup is required.
 ./gradlew bootRun
 ```
 
-The server listens on **http://localhost:8080**, with the MCP SSE endpoint at **`/sse`**.
+The server listens on **http://localhost:8089**, with the MCP SSE endpoint at **`/sse`**.
 On startup the log prints `Registered tools: 6` and `Started JavaNetApplication`.
 
 Seed data (from `V2__seed_data.sql`): one **Demo Customer (id = 1)** with €100,000 cash, and
@@ -115,7 +115,7 @@ Start it first with `./gradlew bootRun`, then use any of the following.
 npx @modelcontextprotocol/inspector
 ```
 
-In the UI, choose transport **SSE** and connect to `http://localhost:8080/sse`. You'll see all
+In the UI, choose transport **SSE** and connect to `http://localhost:8089/sse`. You'll see all
 six tools with their schemas, and can invoke them with a form.
 
 ### Option B — Claude Code (use it as an agent)
@@ -123,7 +123,7 @@ six tools with their schemas, and can invoke them with a form.
 Register the server, then talk to it in natural language:
 
 ```bash
-claude mcp add --transport sse portfolio http://localhost:8080/sse
+claude mcp add --transport sse portfolio http://localhost:8089/sse
 claude mcp list                  # verify it's connected
 ```
 
@@ -147,11 +147,11 @@ and POST requests to the session endpoint it hands back.
 
 ```bash
 # 1. Open the SSE stream in the background; capture the session message endpoint.
-curl -sN http://localhost:8080/sse > /tmp/sse.out &
+curl -sN http://localhost:8089/sse > /tmp/sse.out &
 sleep 1
 EP=$(grep -m1 'data:' /tmp/sse.out | sed 's/^data: *//' | tr -d '\r')   # e.g. /mcp/message?sessionId=...
 
-post() { curl -s -o /dev/null -X POST "http://localhost:8080$EP" \
+post() { curl -s -o /dev/null -X POST "http://localhost:8089$EP" \
            -H 'Content-Type: application/json' -d "$1"; }
 
 # 2. Initialise the session.

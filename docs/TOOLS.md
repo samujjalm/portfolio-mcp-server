@@ -3,7 +3,7 @@
 > Generated from the `@Tool` annotations by `ToolDocGeneratorTest`. Do not edit by hand — run `./gradlew generateToolDocs` to refresh.
 
 - **Server:** `portfolio-mcp` v0.0.1
-- **Transport:** HTTP/SSE — connect at `http://localhost:8080/sse`
+- **Transport:** HTTP/SSE — connect at `http://localhost:8089/sse`
 - **Tools:** 6
 
 | Tool | Summary |
